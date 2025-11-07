@@ -8,10 +8,11 @@
     "init-db": "node ./src/init-db.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "sqlite3": "^5.1.6",
+    "exceljs": "^4.3.0",
+    "express": "^4.18.2",
+    "googleapis": "^165.0.0",
     "sqlite": "^4.1.2",
-    "exceljs": "^4.3.0"
+    "sqlite3": "^5.1.6"
   }
 }
