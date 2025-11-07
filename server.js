@@ -1,101 +1,115 @@
 import express from "express";
 import cors from "cors";
 import { google } from "googleapis";
+import fs from "fs";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-// ID del foglio Google
-const SPREADSHEET_ID = "1fFWnC6k9rYYeAyCbHqu0XBof7cM1xvOQp9i3RrCB1s0";
+// ==========================
+// CONFIG GOOGLE SHEETS
+// ==========================
+const SHEET_ID = "1fFWnC6k9rYYeAyCbHqu0XBof7cM1xvOQp9i3RrCB1s0";
+const SERVICE_ACCOUNT_FILE = "./service-account.json";
 
 const auth = new google.auth.GoogleAuth({
-  keyFile: "service-account.json",
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  keyFile: SERVICE_ACCOUNT_FILE,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"]
 });
+
 const sheets = google.sheets({ version: "v4", auth });
 
-// Legge gli slot
+// ==========================
+// LETTURA SLOT
+// ==========================
 app.get("/api/slots", async (req, res) => {
   try {
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: "SlotPrenotazioni!A1:F8",
+      spreadsheetId: SHEET_ID,
+      range: "SlotPrenotazioni!A2:E" // A2:E contiene le ore per i 5 giorni
     });
-    const values = response.data.values;
-    if (!values || values.length < 2) return res.status(500).send("Foglio vuoto");
 
-    const headers = values[0].slice(1); // giorni della settimana
-    const slots = values.slice(1).map(row => ({
-      ora: row[0],
-      posti: row.slice(1).map(Number)
-    }));
+    const data = response.data.values || [];
+    // Trasforma in array di oggetti per ogni giorno
+    const slots = [];
+    data.forEach((row, i) => {
+      row.forEach((cell, j) => {
+        if (cell.trim() !== "") {
+          slots.push({
+            id: `${i}-${j}`,
+            day: ["Lunedì","Martedì","Mercoledì","Giovedì","Venerdì"][j],
+            time: cell,
+            booked: 0, // aggiorneremo con prenotazioni
+          });
+        }
+      });
+    });
 
-    res.json({ headers, slots });
+    // Leggi prenotazioni per aggiornare booked
+    const prenResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: "Prenotazioni!A2:C"
+    });
+    const prenData = prenResponse.data.values || [];
+    prenData.forEach(p => {
+      const slot = slots.find(s => s.day === p[1] && s.time === p[2]);
+      if (slot) slot.booked += 1;
+    });
+
+    res.json(slots);
+
   } catch (err) {
-    console.error("Errore nel leggere gli slot:", err);
-    res.status(500).send("Errore nel leggere gli slot");
+    console.error("Errore lettura slot:", err);
+    res.status(500).send("Errore nella lettura degli slot");
   }
 });
 
-// Legge i nomi
-app.get("/api/names", async (req, res) => {
+// ==========================
+// LETTURA NOMI
+// ==========================
+app.get("/api/nomi", async (req, res) => {
   try {
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: "Nomi!A2:A",
+      spreadsheetId: SHEET_ID,
+      range: "Nomi!A2:A" // Colonna dei nomi
     });
-    const names = (response.data.values || []).map(r => r[0]);
-    res.json(names);
+    const nomi = response.data.values.map(r => r[0]);
+    res.json(nomi);
   } catch (err) {
-    console.error("Errore nel leggere i nomi:", err);
-    res.status(500).send("Errore nel leggere i nomi");
+    console.error("Errore lettura nomi:", err);
+    res.status(500).send("Errore nella lettura dei nomi");
   }
 });
 
-// Registra una prenotazione
-app.post("/api/book", async (req, res) => {
-  const { giornoIndex, oraIndex, nome } = req.body;
-  if (!nome || giornoIndex == null || oraIndex == null)
-    return res.status(400).send("Dati mancanti");
+// ==========================
+// REGISTRAZIONE PRENOTAZIONE
+// ==========================
+app.post("/api/prenota", async (req, res) => {
+  const { nome, day, time } = req.body;
+  if (!nome || !day || !time) return res.status(400).send("Dati mancanti");
 
   try {
-    // Leggi slot correnti
-    const read = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: "SlotPrenotazioni!A1:F8",
-    });
-    const values = read.data.values;
-
-    let current = Number(values[oraIndex + 1][giornoIndex + 1]);
-    if (current <= 0) return res.status(400).send("Slot completo");
-
-    values[oraIndex + 1][giornoIndex + 1] = current - 1;
-
-    // Aggiorna foglio SlotPrenotazioni
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: "SlotPrenotazioni!A1:F8",
-      valueInputOption: "RAW",
-      requestBody: { values },
-    });
-
-    // Scrive la prenotazione nel foglio Prenotazioni
-    const giorno = values[0][giornoIndex + 1];
-    const ora = values[oraIndex + 1][0];
     await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
+      spreadsheetId: SHEET_ID,
       range: "Prenotazioni!A:C",
-      valueInputOption: "RAW",
-      requestBody: { values: [[nome, giorno, ora]] }
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[nome, day, time]]
+      }
     });
-
-    res.json({ success: true, postiRimasti: current - 1 });
+    res.json({ success: true });
   } catch (err) {
-    console.error("Errore nel registrare prenotazione:", err);
-    res.status(500).send("Errore nella prenotazione");
+    console.error("Errore registrazione prenotazione:", err);
+    res.status(500).send("Errore registrazione prenotazione");
   }
 });
 
-app.listen(3000, () => console.log("✅ Server online su http://localhost:3000"));
+// ==========================
+// AVVIO SERVER
+// ==========================
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`✅ Server online su http://localhost:${PORT}`);
+});
