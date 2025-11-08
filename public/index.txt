@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<title>Prenotazioni</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  body { font-family: Arial, sans-serif; margin: 18px; }
+  h1 { margin: 0 0 12px 0; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  th, td { border: 1px solid #bbb; padding: 8px; text-align: center; }
+  button { padding: 6px 10px; cursor: pointer; }
+  button.full { background:#ddd; color:#666; cursor:not-allowed; }
+  select { display:none; margin-top:6px; }
+  td > .cell-wrapper { display:flex; flex-direction:column; align-items:center; }
+</style>
+</head>
+<body>
+  <h1>Prenotazioni</h1>
+  <table id="slots-table">
+    <thead></thead>
+    <tbody></tbody>
+  </table>
+
+<script>
+(async function(){
+  const DAYS = ["Lunedì","Martedì","Mercoledì","Giovedì","Venerdì"];
+  const tableHead = document.querySelector("#slots-table thead");
+  const tableBody = document.querySelector("#slots-table tbody");
+
+  async function fetchSlots(){
+    const r = await fetch("/api/slots");
+    if (!r.ok) throw new Error("Impossibile leggere /api/slots");
+    return r.json();
+  }
+  async function fetchNames(){
+    const r = await fetch("/api/nomi");
+    if (!r.ok) return [];
+    return r.json();
+  }
+
+  // render
+  async function render(){
+    let slots = [];
+    try {
+      slots = await fetchSlots();
+    } catch(e){
+      tableBody.innerHTML = `<tr><td colspan="6">Errore caricamento slot</td></tr>`;
+      console.error(e);
+      return;
+    }
+    const names = await fetchNames();
+
+    // header
+    tableHead.innerHTML = "<tr><th>Ora</th>" + DAYS.map(d => `<th>${d}</th>`).join("") + "</tr>";
+
+    // group per ora
+    const times = [...new Set(slots.map(s => s.time))];
+    tableBody.innerHTML = "";
+
+    times.forEach(time => {
+      const rowSlots = DAYS.map(day => slots.find(s => s.time === time && s.day === day));
+      const tr = document.createElement("tr");
+      let cells = `<td>${time}</td>`;
+      rowSlots.forEach(slot => {
+        if (!slot) {
+          cells += `<td>-</td>`;
+        } else {
+          const remaining = slot.cap - (slot.booked||0);
+          const disabled = remaining <= 0 ? 'disabled' : '';
+          const fullClass = remaining <= 0 ? 'full' : '';
+          cells += `<td>
+            <div class="cell-wrapper">
+              <button data-day="${slot.day}" data-time="${slot.time}" class="${fullClass}" ${disabled}>${remaining} posti</button>
+              <select></select>
+            </div>
+          </td>`;
+        }
+      });
+      tr.innerHTML = cells;
+      tableBody.appendChild(tr);
+    });
+
+    // add events to buttons
+    document.querySelectorAll("#slots-table button").forEach(btn => {
+      btn.addEventListener("click", (ev) => {
+        if (btn.disabled) return;
+        ev.stopPropagation();
+
+        // close other selects
+        document.querySelectorAll("#slots-table select").forEach(s => { if (s !== btn.parentElement.querySelector("select")) s.style.display='none'; });
+
+        const select = btn.parentElement.querySelector("select");
+        select.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join("");
+        select.style.display = "block";
+        select.focus();
+      });
+    });
+
+    // select change handlers (delegate)
+    document.querySelectorAll("#slots-table select").forEach(sel => {
+      sel.addEventListener("change", async (ev) => {
+        const nome = sel.value;
+        if (!nome) return;
+        if (!confirm(`Confermi la prenotazione per: ${nome}?`)) return;
+
+        const btn = sel.parentElement.querySelector("button");
+        const day = btn.dataset.day;
+        const time = btn.dataset.time;
+
+        try {
+          const r = await fetch("/api/prenota", {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ nome, day, time })
+          });
+          if (!r.ok) {
+            const text = await r.text();
+            alert("Errore: " + text);
+            sel.style.display = "none";
+            return;
+          }
+          const data = await r.json();
+          // update UI: decrease displayed remaining
+          const remaining = (btn.textContent.match(/\d+/) ? parseInt(btn.textContent.match(/\d+/)[0]) : 0) - 1;
+          btn.textContent = `${remaining} posti`;
+          if (remaining <= 0) { btn.disabled = true; btn.classList.add("full"); }
+          sel.style.display = "none";
+          alert(`Prenotazione confermata per ${nome}`);
+        } catch(err) {
+          console.error(err);
+          alert("Errore durante la prenotazione");
+          sel.style.display = "none";
+        }
+      });
+    });
+  } // render
+
+  // click globale per chiudere selects
+  document.addEventListener("click", (ev) => {
+    document.querySelectorAll("#slots-table select").forEach(s => {
+      // se il click è dentro il select o nel button associato, non chiudere
+      if (s.contains(ev.target)) return;
+      const btn = s.parentElement.querySelector("button");
+      if (btn && btn.contains(ev.target)) return;
+      s.style.display = "none";
+    });
+  });
+
+  await render();
+  // aggiornamento live ogni 20s per ricaricare eventuali nuove prenotazioni esterne
+  setInterval(render, 20000);
+})();
+</script>
+</body>
+</html>

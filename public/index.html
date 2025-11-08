@@ -4,74 +4,122 @@
 <meta charset="UTF-8">
 <title>Prenotazioni</title>
 <style>
-  table { border-collapse: collapse; margin-top: 20px; }
+  table { border-collapse: collapse; margin-top: 20px; width: 100%; }
   th, td { border: 1px solid #000; padding: 5px; text-align: center; }
   button { margin: 2px; }
-  select { display: none; margin-top: 5px; }
+  select { position: absolute; display: none; }
 </style>
 </head>
 <body>
 <h1>Prenotazioni</h1>
+
 <table id="slots-table">
   <thead></thead>
   <tbody></tbody>
 </table>
 
+<select id="name-select">
+  <option value="">Scegli il tuo nome</option>
+</select>
+
 <script>
+let names = [];
+let currentBtn = null;
+
 async function loadSlots() {
+  // Carica gli slot
   const res = await fetch("/api/slots");
   const data = await res.json();
 
   const thead = document.querySelector("#slots-table thead");
   const tbody = document.querySelector("#slots-table tbody");
-  thead.innerHTML = "<tr><th>Ora</th>" + data.headers.map(h => `<th>${h}</th>`).join("") + "</tr>";
 
+  thead.innerHTML = "<tr><th>Ora</th>" + data.header.map(h => `<th>${h}</th>`).join("") + "</tr>";
+
+  tbody.innerHTML = "";
   data.slots.forEach((slot, oraIndex) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${slot.ora}</td>` +
       slot.posti.map((p, giornoIndex) =>
         `<td>
-          <button data-ora="${oraIndex}" data-giorno="${giornoIndex}" ${p<=0?'disabled':''}>
+          <button data-ora-index="${oraIndex}" data-giorno-index="${giornoIndex}" ${p <= 0 ? 'disabled' : ''}>
             ${p} posti
           </button>
-          <select></select>
-        </td>`).join("");
+        </td>`
+      ).join("");
     tbody.appendChild(tr);
   });
 
-  // Carica nomi
+  // Carica i nomi
   const namesRes = await fetch("/api/names");
-  const names = await namesRes.json();
+  names = await namesRes.json();
 
-  // Aggiungi eventi ai pulsanti
-  document.querySelectorAll("button").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const cell = btn.parentElement;
-      const select = cell.querySelector("select");
-      select.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join("");
-      select.style.display = "block";
+  // Event listener delegato per i pulsanti
+  tbody.addEventListener("click", (e) => {
+    if (e.target.tagName !== "BUTTON") return;
+    const btn = e.target;
+    currentBtn = btn;
 
-      select.onchange = async () => {
-        const nome = select.value;
-        const oraIndex = parseInt(btn.dataset.ora);
-        const giornoIndex = parseInt(btn.dataset.giorno);
-        const res = await fetch("/api/book", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ giornoIndex, oraIndex, nome })
-        });
-        if (res.ok) {
-          const result = await res.json();
-          alert(`Prenotazione confermata per ${nome}`);
-          btn.textContent = result.postiRimasti + " posti";
-          if (result.postiRimasti <= 0) btn.disabled = true;
-          select.style.display = "none";
-        } else {
-          const text = await res.text();
-          alert("Errore: " + text);
-        }
-      };
-    });
+    const select = document.getElementById("name-select");
+    select.innerHTML = '<option value="">Scegli il tuo nome</option>' +
+      names.map(n => `<option value="${n}">${n}</option>`).join("");
+
+    // Posiziona il select vicino al pulsante cliccato
+    const rect = btn.getBoundingClientRect();
+    select.style.top = (window.scrollY + rect.bottom + 2) + "px";
+    select.style.left = (window.scrollX + rect.left) + "px";
+    select.style.display = "block";
+    select.focus();
+  });
+
+  // Prenotazione quando si seleziona un nome
+  const select = document.getElementById("name-select");
+  select.addEventListener("change", async (e) => {
+    const nome = e.target.value;
+    if (!nome || !currentBtn) return;
+
+    const oraIndex = parseInt(currentBtn.dataset.oraIndex);
+    const giornoIndex = parseInt(currentBtn.dataset.giornoIndex);
+
+    const conferma = confirm(`Confermi la prenotazione di ${nome} alle ore ${currentBtn.textContent} ?`);
+    if (!conferma) {
+      select.value = "";
+      select.style.display = "none";
+      currentBtn = null;
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nome, oraIndex, giornoIndex })
+      });
+      const result = await res.json();
+
+      if (res.ok) {
+        currentBtn.textContent = result.postiRimasti + " posti";
+        currentBtn.disabled = result.postiRimasti <= 0;
+        alert(`Prenotazione confermata per ${nome}`);
+      } else {
+        alert("Errore di prenotazione: " + result.error);
+      }
+    } catch (err) {
+      alert("Errore di prenotazione: " + err.message);
+    }
+
+    select.value = "";
+    select.style.display = "none";
+    currentBtn = null;
+  });
+
+  // Nascondi select se clicchi altrove
+  document.addEventListener("click", (e) => {
+    const select = document.getElementById("name-select");
+    if (e.target !== select && e.target.tagName !== "BUTTON") {
+      select.style.display = "none";
+      currentBtn = null;
+    }
   });
 }
 
