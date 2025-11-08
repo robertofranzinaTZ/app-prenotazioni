@@ -14,9 +14,9 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
 const SPREADSHEET_ID = "1fFWnC6k9rYYeAyCbHqu0XBof7cM1xvOQp9i3RrCB1s0";
-const SLOTS_RANGE = "Slots!A1:F20";      // Foglio Slots
-const NAMES_RANGE = "Nomi!A1:A230";      // Foglio Nomi
-const BOOKINGS_RANGE = "Prenotazioni!A1:C1"; // Foglio Prenotazioni (nome, giorno, ora)
+const SLOTS_RANGE = "Slots!A1:F20";
+const NAMES_RANGE = "Nomi!A1:A230";
+const BOOKINGS_RANGE = "Prenotazioni!A1:C1";
 
 let sheets;
 let SLOT_CACHE = [];
@@ -24,7 +24,7 @@ let HEADER = [];
 
 async function initSheets() {
   const auth = new google.auth.GoogleAuth({
-    keyFile: "credentials.json",
+    credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
     scopes: ["https://www.googleapis.com/auth/spreadsheets"]
   });
 
@@ -83,8 +83,8 @@ app.post("/api/book", async (req, res) => {
     return res.status(400).json({ error: "Slot pieno" });
   }
 
-  // Conferma prenotazione
-  slot.posti[giornoIndex]--; // Aggiorna cache
+  // Aggiorna cache
+  slot.posti[giornoIndex]--;
 
   try {
     // Scrivi su Prenotazioni
@@ -99,7 +99,7 @@ app.post("/api/book", async (req, res) => {
 
     // Aggiorna Slots nel foglio
     const colLetter = String.fromCharCode(66 + giornoIndex); // B = 66
-    const rowNumber = oraIndex + 2; // header = 1
+    const rowNumber = oraIndex + 2;
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
       range: `Slots!${colLetter}${rowNumber}`,
@@ -108,16 +108,6 @@ app.post("/api/book", async (req, res) => {
     });
 
     res.json({ success: true, postiRimasti: slot.posti[giornoIndex] });
-
   } catch (err) {
     console.error("Errore salvataggio su Google Sheets:", err);
-    res.status(500).json({ error: "Errore salvataggio su Google Sheets" });
-  }
-});
-
-// Avvio server
-const PORT = 3000;
-app.listen(PORT, async () => {
-  console.log(`✅ Server online su http://localhost:${PORT}`);
-  await initSheets();
-});
+    res.status(500).json({ error: "Errore salvatag
