@@ -23,6 +23,10 @@ let SLOT_CACHE = [];
 let HEADER = [];
 
 async function initSheets() {
+  if (!process.env.GOOGLE_CREDENTIALS) {
+    throw new Error("Variabile GOOGLE_CREDENTIALS non trovata");
+  }
+
   const auth = new google.auth.GoogleAuth({
     credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
     scopes: ["https://www.googleapis.com/auth/spreadsheets"]
@@ -31,17 +35,16 @@ async function initSheets() {
   const client = await auth.getClient();
   sheets = google.sheets({ version: "v4", auth: client });
 
-  await loadSlots();
-}
-
-async function loadSlots() {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: SLOTS_RANGE
   });
 
   const rows = res.data.values;
-  if (!rows || rows.length === 0) return;
+  if (!rows || rows.length === 0) {
+    console.warn("⚠️ Nessuno slot trovato nel foglio");
+    return;
+  }
 
   HEADER = rows[0].slice(1); // Lunedì, Martedì, ...
   SLOT_CACHE = [];
@@ -51,22 +54,36 @@ async function loadSlots() {
     const posti = rows[i].slice(1).map(n => parseInt(n) || 0);
     SLOT_CACHE.push({ ora, posti });
   }
+
+  console.log("✅ Sheets inizializzati correttamente");
 }
 
 // Endpoint per ottenere slot
 app.get("/api/slots", async (req, res) => {
-  if (SLOT_CACHE.length === 0) await loadSlots();
+  if (SLOT_CACHE.length === 0) {
+    try {
+      await initSheets();
+    } catch (err) {
+      console.error("Errore caricamento slot:", err);
+      return res.status(500).json({ error: "Errore caricamento slot" });
+    }
+  }
   res.json({ header: HEADER, slots: SLOT_CACHE });
 });
 
 // Endpoint per ottenere nomi
 app.get("/api/names", async (req, res) => {
-  const resSheet = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: NAMES_RANGE
-  });
-  const names = resSheet.data.values?.flat() || [];
-  res.json(names);
+  try {
+    const resSheet = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: NAMES_RANGE
+    });
+    const names = resSheet.data.values?.flat() || [];
+    res.json(names);
+  } catch (err) {
+    console.error("Errore caricamento nomi:", err);
+    res.status(500).json({ error: "Errore caricamento nomi" });
+  }
 });
 
 // Endpoint per prenotare
@@ -78,18 +95,15 @@ app.post("/api/book", async (req, res) => {
 
   const slot = SLOT_CACHE[oraIndex];
   if (!slot) return res.status(400).json({ error: "Slot non trovato" });
-
-  if (slot.posti[giornoIndex] <= 0) {
-    return res.status(400).json({ error: "Slot pieno" });
-  }
+  if (slot.posti[giornoIndex] <= 0) return res.status(400).json({ error: "Slot pieno" });
 
   // Aggiorna cache
   slot.posti[giornoIndex]--;
 
   try {
-    // Scrivi su Prenotazioni
     const giorno = HEADER[giornoIndex];
     const ora = slot.ora;
+
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: BOOKINGS_RANGE,
@@ -97,7 +111,6 @@ app.post("/api/book", async (req, res) => {
       requestBody: { values: [[nome, giorno, ora]] }
     });
 
-    // Aggiorna Slots nel foglio
     const colLetter = String.fromCharCode(66 + giornoIndex); // B = 66
     const rowNumber = oraIndex + 2;
     await sheets.spreadsheets.values.update({
@@ -109,5 +122,19 @@ app.post("/api/book", async (req, res) => {
 
     res.json({ success: true, postiRimasti: slot.posti[giornoIndex] });
   } catch (err) {
-    console.error("Errore salvataggio su Google Sheets:", err);
-    res.status(500).json({ error: "Errore salvatag
+    console.error("Errore salvataggio prenotazione:", err);
+    res.status(500).json({ error: "Errore salvataggio prenotazione" });
+  }
+});
+
+// Avvio server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  console.log(`✅ Server online su http://localhost:${PORT}`);
+
+  try {
+    await initSheets();
+  } catch (err) {
+    console.error("❌ Errore durante initSheets:", err);
+  }
+});
